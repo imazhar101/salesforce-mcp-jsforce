@@ -1,0 +1,53 @@
+{
+  "name": "@imazhar101/salesforce-mcp-jsforce",
+  "version": "0.1.0",
+  "description": "A lite, single-org Salesforce MCP server built on jsforce. Bring-your-own OAuth token — no credentials stored server-side. Runs over stdio (Claude Code) or as a dedicated streamable-HTTP server.",
+  "type": "module",
+  "license": "MIT",
+  "author": "imazhar101",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imazhar101/salesforce-mcp-jsforce.git"
+  },
+  "homepage": "https://github.com/imazhar101/salesforce-mcp-jsforce#readme",
+  "bugs": {
+    "url": "https://github.com/imazhar101/salesforce-mcp-jsforce/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "salesforce",
+    "jsforce",
+    "claude",
+    "oauth"
+  ],
+  "main": "dist/index.js",
+  "bin": {
+    "salesforce-mcp-jsforce": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "login": "tsx src/index.ts login",
+    "http": "tsx src/index.ts http",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "jsforce": "^3.6.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
