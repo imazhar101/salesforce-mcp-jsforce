@@ -3,7 +3,7 @@ import path from "node:path";
 
 /** Package identity (kept in sync with package.json). */
 export const PKG_NAME = "salesforce-mcp-jsforce";
-export const PKG_VERSION = "0.1.0";
+export const PKG_VERSION = "0.2.0";
 
 /** Salesforce REST API version used for all jsforce connections. */
 export const DEFAULT_API_VERSION = process.env.SF_API_VERSION || "62.0";
