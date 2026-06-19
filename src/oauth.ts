@@ -11,6 +11,7 @@ interface LoginOptions {
   loginUrl: string;
   scope: string;
   callbackPort: number;
+  quiet: boolean; // suppress the printed config suggestion (and the token)
 }
 
 function parseArgs(argv: string[]): LoginOptions {
@@ -31,6 +32,7 @@ function parseArgs(argv: string[]): LoginOptions {
     loginUrl: get("--login-url") || DEFAULT_LOGIN_URL,
     scope: get("--scope") || process.env.SF_SCOPE || "api refresh_token",
     callbackPort: Number(get("--port") || process.env.SF_CALLBACK_PORT || 1717),
+    quiet: argv.includes("--quiet"),
   };
 }
 
@@ -146,6 +148,11 @@ export async function runLogin(argv: string[]): Promise<void> {
 
   console.error(`\n✓ Logged in. Token saved to ${tokenPath()}`);
   console.error(`  Instance: ${creds.instanceUrl}\n`);
+
+  // In quiet mode (e.g. when driven by an onboarding tool) stop here — do not
+  // print the access token or a config snippet to the terminal.
+  if (opts.quiet) return;
+
   console.error("Add to Claude Code (stdio) with:\n");
   console.error("  claude mcp add salesforce -- npx -y @imazhar101/salesforce-mcp-jsforce\n");
   console.error("…or paste into .mcp.json:\n");

@@ -43,7 +43,9 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "login":
       await runLogin(rest);
-      return;
+      // The OAuth callback server can leave a keep-alive socket open, which
+      // keeps the event loop alive and hangs the CLI. Exit explicitly.
+      process.exit(0);
     case "http": {
       const port = Number(process.env.PORT || rest[0] || 3000);
       await startHttp(port);
