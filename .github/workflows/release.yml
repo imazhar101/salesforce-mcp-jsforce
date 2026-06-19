@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag like v0.1.0 (must match package.json "version") to cut a release.
+# The job publishes to npm (with provenance) and creates a GitHub Release.
+# Both steps are idempotent — re-running on an existing version/tag is a no-op.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm provenance (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG}"
+            exit 1
+          fi
+
+      - name: Publish to npm (skip if already published)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          if npm view "${NAME}@${VER}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VER} already on npm — skipping publish."
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Create GitHub Release (skip if it exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — skipping."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
