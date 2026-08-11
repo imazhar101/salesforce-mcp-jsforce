@@ -8,17 +8,17 @@ A **lite, single-org** [Model Context Protocol](https://modelcontextprotocol.io)
 
 ## Tools
 
-| Tool | Mode | Description |
-| --- | --- | --- |
-| `salesforce_identity` | read | Identity of the supplied token (token validity check) |
-| `salesforce_query` | read | Run a SOQL query |
-| `salesforce_search` | read | Run a SOSL full-text search |
-| `salesforce_list_objects` | read | List sObjects + key metadata |
-| `salesforce_describe_object` | read | Trimmed describe of an sObject |
-| `salesforce_get_record` | read | Retrieve a record by Id |
-| `salesforce_create_record` | write | Create a record |
-| `salesforce_update_record` | write | Update a record |
-| `salesforce_delete_record` | write | Delete a record |
+| Tool                         | Mode  | Description                                           |
+| ---------------------------- | ----- | ----------------------------------------------------- |
+| `salesforce_identity`        | read  | Identity of the supplied token (token validity check) |
+| `salesforce_query`           | read  | Run a SOQL query                                      |
+| `salesforce_search`          | read  | Run a SOSL full-text search                           |
+| `salesforce_list_objects`    | read  | List sObjects + key metadata                          |
+| `salesforce_describe_object` | read  | Trimmed describe of an sObject                        |
+| `salesforce_get_record`      | read  | Retrieve a record by Id                               |
+| `salesforce_create_record`   | write | Create a record                                       |
+| `salesforce_update_record`   | write | Update a record                                       |
+| `salesforce_delete_record`   | write | Delete a record                                       |
 
 Set `SF_READONLY=1` to register the read tools only.
 
@@ -72,17 +72,17 @@ curl -s http://localhost:3000/mcp \
 
 ## Environment variables
 
-| Var | Default | Purpose |
-| --- | --- | --- |
-| `SF_ACCESS_TOKEN` | — | stdio access token |
-| `SF_INSTANCE_URL` | — | stdio instance URL |
-| `SF_API_VERSION` | `62.0` | REST API version |
-| `SF_READONLY` | off | `1` strips write tools |
-| `SF_LOGIN_URL` | `https://login.salesforce.com` | OAuth host (sandbox: `test.salesforce.com`) |
-| `SF_CLIENT_ID` | — | ECA consumer key for `login` |
-| `SF_CLIENT_SECRET` | — | only for confidential apps |
-| `SF_SCOPE` | `api refresh_token` | OAuth scopes |
-| `PORT` | `3000` | HTTP host port |
+| Var                | Default                        | Purpose                                     |
+| ------------------ | ------------------------------ | ------------------------------------------- |
+| `SF_ACCESS_TOKEN`  | —                              | stdio access token                          |
+| `SF_INSTANCE_URL`  | —                              | stdio instance URL                          |
+| `SF_API_VERSION`   | `62.0`                         | REST API version                            |
+| `SF_READONLY`      | off                            | `1` strips write tools                      |
+| `SF_LOGIN_URL`     | `https://login.salesforce.com` | OAuth host (sandbox: `test.salesforce.com`) |
+| `SF_CLIENT_ID`     | —                              | ECA consumer key for `login`                |
+| `SF_CLIENT_SECRET` | —                              | only for confidential apps                  |
+| `SF_SCOPE`         | `api refresh_token`            | OAuth scopes                                |
+| `PORT`             | `3000`                         | HTTP host port                              |
 
 ## Security model
 

@@ -1,24 +1,24 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
-import { PKG_NAME, PKG_VERSION, READ_ONLY } from "./config.js";
-import type { CredentialResolver, SfCredentials } from "./auth.js";
-import * as sf from "./client.js";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+import { PKG_NAME, PKG_VERSION, READ_ONLY } from './config.js'
+import type { CredentialResolver, SfCredentials } from './auth.js'
+import * as sf from './client.js'
 
 type TextResult = {
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-};
+  content: { type: 'text'; text: string }[]
+  isError?: boolean
+}
 
 function ok(data: unknown): TextResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
 }
 
 function fail(error: unknown): TextResult {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error)
   return {
-    content: [{ type: "text", text: JSON.stringify({ error: message }, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify({ error: message }, null, 2) }],
     isError: true,
-  };
+  }
 }
 
 /**
@@ -37,19 +37,19 @@ const BYO_AUTH = {
     })
     .optional()
     .describe(
-      "Internal: per-request Salesforce credentials injected by an MCP gateway. " +
-        "Leave unset in direct use — the server falls back to env/token-file creds.",
+      'Internal: per-request Salesforce credentials injected by an MCP gateway. ' +
+        'Leave unset in direct use — the server falls back to env/token-file creds.',
     ),
-};
+}
 
-type ToolArgs = { _sfAuth?: SfCredentials } & Record<string, unknown>;
+type ToolArgs = { _sfAuth?: SfCredentials } & Record<string, unknown>
 
 function perCallCreds(args: ToolArgs): SfCredentials | undefined {
-  const a = args?._sfAuth;
+  const a = args?._sfAuth
   if (a && a.accessToken && a.instanceUrl) {
-    return { accessToken: a.accessToken, instanceUrl: a.instanceUrl, apiVersion: a.apiVersion };
+    return { accessToken: a.accessToken, instanceUrl: a.instanceUrl, apiVersion: a.apiVersion }
   }
-  return undefined;
+  return undefined
 }
 
 /**
@@ -66,164 +66,164 @@ export function buildServer(
   const server = new McpServer(
     { name: PKG_NAME, version: PKG_VERSION },
     { capabilities: { tools: {} } },
-  );
+  )
 
-  const conn = (args: ToolArgs = {}) => sf.makeConnection(perCallCreds(args) ?? getCreds());
+  const conn = (args: ToolArgs = {}) => sf.makeConnection(perCallCreds(args) ?? getCreds())
 
   // ── Read tools ───────────────────────────────────────────────────────────────
 
   server.tool(
-    "salesforce_identity",
-    "Return the identity (user, org, instance) of the supplied token. Use this to confirm the connection is authenticated.",
+    'salesforce_identity',
+    'Return the identity (user, org, instance) of the supplied token. Use this to confirm the connection is authenticated.',
     { ...BYO_AUTH },
     async (args) => {
       try {
-        return ok(await sf.identity(conn(args)));
+        return ok(await sf.identity(conn(args)))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   server.tool(
-    "salesforce_query",
-    "Run a SOQL query and return matching records.",
+    'salesforce_query',
+    'Run a SOQL query and return matching records.',
     {
-      soql: z.string().describe("A SOQL query, e.g. SELECT Id, Name FROM Account LIMIT 10"),
+      soql: z.string().describe('A SOQL query, e.g. SELECT Id, Name FROM Account LIMIT 10'),
       ...BYO_AUTH,
     },
     async (args) => {
       try {
-        return ok(await sf.soqlQuery(conn(args), args.soql));
+        return ok(await sf.soqlQuery(conn(args), args.soql))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   server.tool(
-    "salesforce_search",
-    "Run a SOSL full-text search across objects.",
+    'salesforce_search',
+    'Run a SOSL full-text search across objects.',
     {
       sosl: z
         .string()
-        .describe("A SOSL search, e.g. FIND {Acme} IN ALL FIELDS RETURNING Account(Id, Name)"),
+        .describe('A SOSL search, e.g. FIND {Acme} IN ALL FIELDS RETURNING Account(Id, Name)'),
       ...BYO_AUTH,
     },
     async (args) => {
       try {
-        return ok(await sf.soslSearch(conn(args), args.sosl));
+        return ok(await sf.soslSearch(conn(args), args.sosl))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   server.tool(
-    "salesforce_list_objects",
-    "List all sObjects available in the org with their key metadata.",
+    'salesforce_list_objects',
+    'List all sObjects available in the org with their key metadata.',
     { ...BYO_AUTH },
     async (args) => {
       try {
-        return ok(await sf.listObjects(conn(args)));
+        return ok(await sf.listObjects(conn(args)))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   server.tool(
-    "salesforce_describe_object",
-    "Describe an sObject: its fields, types, picklist values, and references (trimmed payload).",
+    'salesforce_describe_object',
+    'Describe an sObject: its fields, types, picklist values, and references (trimmed payload).',
     {
-      object_name: z.string().describe("API name of the object, e.g. Account or Custom__c"),
+      object_name: z.string().describe('API name of the object, e.g. Account or Custom__c'),
       ...BYO_AUTH,
     },
     async (args) => {
       try {
-        return ok(await sf.describeObject(conn(args), args.object_name));
+        return ok(await sf.describeObject(conn(args), args.object_name))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   server.tool(
-    "salesforce_get_record",
-    "Retrieve a single record by Id, optionally limited to specific fields.",
+    'salesforce_get_record',
+    'Retrieve a single record by Id, optionally limited to specific fields.',
     {
-      object_name: z.string().describe("API name of the object, e.g. Account"),
-      record_id: z.string().describe("The 15- or 18-char record Id"),
+      object_name: z.string().describe('API name of the object, e.g. Account'),
+      record_id: z.string().describe('The 15- or 18-char record Id'),
       fields: z
         .array(z.string())
         .optional()
-        .describe("Optional list of field API names; omit for all fields"),
+        .describe('Optional list of field API names; omit for all fields'),
       ...BYO_AUTH,
     },
     async (args) => {
       try {
-        return ok(await sf.getRecord(conn(args), args.object_name, args.record_id, args.fields));
+        return ok(await sf.getRecord(conn(args), args.object_name, args.record_id, args.fields))
       } catch (e) {
-        return fail(e);
+        return fail(e)
       }
     },
-  );
+  )
 
   // ── Write tools (skipped entirely in read-only mode) ──────────────────────────
 
   if (!readOnly) {
     server.tool(
-      "salesforce_create_record",
-      "Create a new record on the given object.",
+      'salesforce_create_record',
+      'Create a new record on the given object.',
       {
-        object_name: z.string().describe("API name of the object, e.g. Contact"),
-        data: z.record(z.any()).describe("Field API name → value map for the new record"),
+        object_name: z.string().describe('API name of the object, e.g. Contact'),
+        data: z.record(z.any()).describe('Field API name → value map for the new record'),
         ...BYO_AUTH,
       },
       async (args) => {
         try {
-          return ok(await sf.createRecord(conn(args), args.object_name, args.data));
+          return ok(await sf.createRecord(conn(args), args.object_name, args.data))
         } catch (e) {
-          return fail(e);
+          return fail(e)
         }
       },
-    );
+    )
 
     server.tool(
-      "salesforce_update_record",
-      "Update fields on an existing record.",
+      'salesforce_update_record',
+      'Update fields on an existing record.',
       {
-        object_name: z.string().describe("API name of the object"),
-        record_id: z.string().describe("The Id of the record to update"),
-        data: z.record(z.any()).describe("Field API name → new value map"),
+        object_name: z.string().describe('API name of the object'),
+        record_id: z.string().describe('The Id of the record to update'),
+        data: z.record(z.any()).describe('Field API name → new value map'),
         ...BYO_AUTH,
       },
       async (args) => {
         try {
-          return ok(await sf.updateRecord(conn(args), args.object_name, args.record_id, args.data));
+          return ok(await sf.updateRecord(conn(args), args.object_name, args.record_id, args.data))
         } catch (e) {
-          return fail(e);
+          return fail(e)
         }
       },
-    );
+    )
 
     server.tool(
-      "salesforce_delete_record",
-      "Delete a record by Id.",
+      'salesforce_delete_record',
+      'Delete a record by Id.',
       {
-        object_name: z.string().describe("API name of the object"),
-        record_id: z.string().describe("The Id of the record to delete"),
+        object_name: z.string().describe('API name of the object'),
+        record_id: z.string().describe('The Id of the record to delete'),
         ...BYO_AUTH,
       },
       async (args) => {
         try {
-          return ok(await sf.deleteRecord(conn(args), args.object_name, args.record_id));
+          return ok(await sf.deleteRecord(conn(args), args.object_name, args.record_id))
         } catch (e) {
-          return fail(e);
+          return fail(e)
         }
       },
-    );
+    )
   }
 
-  return server;
+  return server
 }
