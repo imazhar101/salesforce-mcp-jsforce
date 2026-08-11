@@ -1,8 +1,33 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { assertSafeLoginUrl } from '../src/oauth.js'
+import { assertSafeLoginUrl, buildRedirectUri } from '../src/oauth.js'
 import { isAllowedHost } from '../src/http.js'
+
+describe('buildRedirectUri', () => {
+  it('defaults to localhost — Salesforce matches the registered URL byte-for-byte', () => {
+    // Connected Apps (ASU LE's included) register http://localhost:1717/callback.
+    // Sending 127.0.0.1 instead fails the flow with redirect_uri_mismatch, which
+    // is exactly what shipped in 0.4.0. Do not "modernise" this host.
+    assert.equal(buildRedirectUri(undefined, 1717), 'http://localhost:1717/callback')
+    assert.equal(buildRedirectUri(undefined, 1718), 'http://localhost:1718/callback')
+  })
+
+  it('honours an explicit loopback override', () => {
+    assert.equal(
+      buildRedirectUri('http://127.0.0.1:1717/callback', 1717),
+      'http://127.0.0.1:1717/callback',
+    )
+  })
+
+  it('refuses a non-loopback redirect', () => {
+    assert.throws(() => buildRedirectUri('https://evil.example.com/callback', 1717), /loopback/)
+  })
+
+  it('refuses a malformed redirect', () => {
+    assert.throws(() => buildRedirectUri('not-a-url', 1717), /Invalid --redirect-uri/)
+  })
+})
 
 describe('assertSafeLoginUrl', () => {
   it('accepts https hosts and normalises to the origin', () => {

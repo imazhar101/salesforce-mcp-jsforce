@@ -11,6 +11,7 @@ interface LoginOptions {
   loginUrl: string
   scope: string
   callbackPort: number
+  redirectUri: string
   quiet: boolean // suppress the printed config suggestion
 }
 
@@ -55,9 +56,39 @@ function parseArgs(argv: string[]): LoginOptions {
     loginUrl: assertSafeLoginUrl(get('--login-url') || DEFAULT_LOGIN_URL),
     scope: get('--scope') || process.env.SF_SCOPE || 'api refresh_token',
     callbackPort: port,
+    redirectUri: buildRedirectUri(get('--redirect-uri') || process.env.SF_REDIRECT_URI, port),
     quiet: argv.includes('--quiet'),
   }
 }
+
+/**
+ * The redirect URI Salesforce is told to come back to.
+ *
+ * Salesforce matches this byte-for-byte against the Connected App's registered
+ * callback URL, so the host is NOT interchangeable: `http://localhost:1717/...`
+ * and `http://127.0.0.1:1717/...` are different values, and existing apps
+ * register `localhost`. Advertising the wrong one fails the whole flow with
+ * `redirect_uri_mismatch` before the user can even sign in.
+ *
+ * This is independent of what the callback server binds to — see runLogin.
+ */
+export function buildRedirectUri(override: string | undefined, port: number): string {
+  if (!override) return `http://localhost:${port}/callback`
+  let url: URL
+  try {
+    url = new URL(override)
+  } catch {
+    throw new Error(`Invalid --redirect-uri: ${override}`)
+  }
+  if (!LOOPBACK_REDIRECT_HOSTS.has(url.hostname)) {
+    throw new Error(
+      `--redirect-uri must point at the loopback interface (localhost, 127.0.0.1 or [::1]); got ${url.hostname}`,
+    )
+  }
+  return url.toString()
+}
+
+const LOOPBACK_REDIRECT_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 
 function pkce() {
   const verifier = crypto.randomBytes(32).toString('base64url')
@@ -97,9 +128,9 @@ function openBrowser(url: string): void {
 export async function runLogin(argv: string[]): Promise<void> {
   const opts = parseArgs(argv)
   const { verifier, challenge } = pkce()
-  // 127.0.0.1, not localhost: the callback server binds the loopback address
-  // only, so nothing else on the network can race it for the code.
-  const redirectUri = `http://127.0.0.1:${opts.callbackPort}/callback`
+  // What Salesforce is told to redirect to — must match the Connected App's
+  // registered URL exactly. Where we LISTEN is a separate decision below.
+  const redirectUri = opts.redirectUri
   const state = crypto.randomBytes(16).toString('hex')
 
   const authUrl = new URL(`${opts.loginUrl}/services/oauth2/authorize`)
@@ -112,7 +143,10 @@ export async function runLogin(argv: string[]): Promise<void> {
   authUrl.searchParams.set('state', state)
 
   const code = await new Promise<string>((resolve, reject) => {
-    const server = http.createServer((req, res) => {
+    const servers: http.Server[] = []
+    const closeAll = () => servers.forEach((s) => s.close())
+
+    const handler = (req: http.IncomingMessage, res: http.ServerResponse) => {
       if (!req.url?.startsWith('/callback')) {
         res.writeHead(404).end()
         return
@@ -123,13 +157,13 @@ export async function runLogin(argv: string[]): Promise<void> {
         res
           .writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
           .end(`Login failed: ${err} ${url.searchParams.get('error_description') ?? ''}`)
-        server.close()
+        closeAll()
         reject(new Error(`OAuth error: ${err}`))
         return
       }
       if (url.searchParams.get('state') !== state) {
         res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }).end('State mismatch')
-        server.close()
+        closeAll()
         reject(new Error('OAuth state mismatch — possible CSRF, aborting.'))
         return
       }
@@ -137,15 +171,15 @@ export async function runLogin(argv: string[]): Promise<void> {
       res
         .writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
         .end('Authenticated. You can close this tab and return to your terminal.')
-      server.close()
+      closeAll()
       if (got) resolve(got)
       else reject(new Error('No authorization code returned.'))
-    })
+    }
 
     // Never wait forever: an abandoned sign-in used to leave the callback
     // server (and the process) alive indefinitely.
     const timer = setTimeout(() => {
-      server.close()
+      closeAll()
       reject(
         new Error(
           `Timed out after ${Math.round(LOGIN_TIMEOUT_MS / 1000)}s waiting for the Salesforce sign-in to complete.`,
@@ -153,14 +187,58 @@ export async function runLogin(argv: string[]): Promise<void> {
       )
     }, LOGIN_TIMEOUT_MS)
     timer.unref()
-    server.on('close', () => clearTimeout(timer))
-    server.on('error', reject)
 
-    server.listen(opts.callbackPort, '127.0.0.1', () => {
-      console.error(`\nOpening Salesforce login in your browser…`)
-      console.error(`If it does not open, visit:\n${authUrl.toString()}\n`)
-      openBrowser(authUrl.toString())
-    })
+    /**
+     * Listen on the loopback interface only — never every interface, so nothing
+     * else on the network can race the browser for the authorization code.
+     *
+     * Both loopback addresses get a listener when the redirect says `localhost`:
+     * that name resolves to ::1 on some machines and 127.0.0.1 on others, and
+     * the browser picks. Binding one and hoping is how you get an intermittent
+     * ECONNREFUSED on the callback that looks like a broken login.
+     */
+    const redirectHost = new URL(redirectUri).hostname
+    const hosts = redirectHost === 'localhost' ? ['127.0.0.1', '::1'] : [redirectHost]
+
+    let bound = 0
+    let failed = 0
+    let announced = false
+
+    const fatal = (e: Error) => {
+      clearTimeout(timer)
+      closeAll()
+      reject(e)
+    }
+
+    for (const host of hosts) {
+      const server = http.createServer(handler)
+      servers.push(server)
+
+      server.on('error', (e: NodeJS.ErrnoException) => {
+        // A busy port means someone else would receive our authorization code —
+        // never quietly continue on the other address.
+        if (e.code === 'EADDRINUSE') {
+          return fatal(
+            new Error(
+              `Port ${opts.callbackPort} is already in use on ${host}. Close whatever holds it, or pass --port <free port> (and register that callback URL).`,
+            ),
+          )
+        }
+        // Otherwise this is usually a host with no IPv6 stack: tolerable, as
+        // long as the other address bound.
+        failed++
+        if (bound === 0 && failed === hosts.length) fatal(e)
+      })
+
+      server.listen(opts.callbackPort, host, () => {
+        bound++
+        if (announced) return
+        announced = true
+        console.error(`\nOpening Salesforce login in your browser…`)
+        console.error(`If it does not open, visit:\n${authUrl.toString()}\n`)
+        openBrowser(authUrl.toString())
+      })
+    }
   })
 
   // Exchange the code for a token (PKCE; secret only sent if provided).
