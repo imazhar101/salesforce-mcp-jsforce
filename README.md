@@ -2,7 +2,8 @@
 
 A **lite, single-org** [Model Context Protocol](https://modelcontextprotocol.io) server for Salesforce, built on [jsforce](https://github.com/jsforce/jsforce).
 
-- **Bring your own token.** The server never stores a client secret, username, or password. You authenticate once with OAuth; it holds only an access token + instance URL.
+- **Bring your own token.** The server never stores a username or password. You authenticate once with OAuth; it holds an access token + instance URL (plus, for stdio, a refresh token).
+- **Sign in once.** An expired access token is renewed from the saved refresh token and the failed call retried, so a long-running client keeps working until the grant is revoked.
 - **Two ways to run.** Locally over **stdio** (for Claude Code and other MCP clients) or as a **dedicated streamable-HTTP server** where each request carries its own token.
 - **Safe to host & open-source.** No org-specific config, no multi-environment credential matrix, no destructive metadata tooling. Optional read-only mode.
 
@@ -37,13 +38,32 @@ claude mcp add salesforce -- npx -y @imazhar101/salesforce-mcp-jsforce
 
 `login` opens a browser, completes the OAuth handshake, saves the token to
 `~/.config/salesforce-mcp-jsforce/token.json`, and prints ready-to-paste config.
+Sign out (and revoke the grant at Salesforce) with `salesforce-mcp-jsforce logout`.
 
 ## Credentials
 
 **stdio** — one of:
 
-- `SF_ACCESS_TOKEN` + `SF_INSTANCE_URL` environment variables, or
-- the token file written by `login` (read automatically).
+- the token file written by `login` (read automatically, **renewed automatically**), or
+- `SF_ACCESS_TOKEN` + `SF_INSTANCE_URL` environment variables.
+
+Env credentials win when both are present. They carry no refresh token, so they
+cannot be renewed — prefer the token file unless something else is minting
+short-lived tokens for you.
+
+### Token renewal
+
+Salesforce access tokens expire on the org's session policy, typically hours.
+When a call fails with `INVALID_SESSION_ID`, the server runs the `refresh_token`
+grant, writes the new token back to the token file (atomically, `0600`) and
+retries the call once. Concurrent calls share a single refresh. Nothing is
+retried a second time — if a freshly issued token is also rejected, the problem
+is not token age.
+
+Renewal needs `refreshToken`, `clientId` and `loginUrl` in the token file, which
+`login` saves when the `refresh_token` scope is granted. HTTP callers and
+gateway `_sfAuth` callers are passed through untouched: those tokens belong to
+whoever minted them.
 
 **HTTP** — per request, via headers:
 
@@ -60,6 +80,13 @@ PORT=3000 salesforce-mcp-jsforce http
 Stateless streamable-HTTP at `POST /mcp`; health probe at `GET /health`. Each
 request is handled by a throwaway server instance keyed to its own token — no
 caller state is shared. Put it behind TLS; the access token is a live credential.
+
+It binds **`127.0.0.1`** by default and rejects requests whose `Host`/`Origin`
+is not loopback, which is what stops a page in your browser from reaching it by
+DNS rebinding. To expose it, set `SF_MCP_HOST=0.0.0.0` **and**
+`SF_MCP_ALLOWED_HOSTS=your.host` — deliberately, and behind a proxy that
+authenticates, because this server authenticates nobody: it forwards whatever
+token the request carries.
 
 ```bash
 curl -s http://localhost:3000/mcp \
@@ -84,12 +111,28 @@ curl -s http://localhost:3000/mcp \
 | `SF_SCOPE`         | `api refresh_token`            | OAuth scopes                                |
 | `PORT`             | `3000`                         | HTTP host port                              |
 
+| Var                     | Default                            | Purpose                                              |
+| ----------------------- | ---------------------------------- | ---------------------------------------------------- |
+| `SF_MCP_CONFIG_DIR`     | `~/.config/salesforce-mcp-jsforce` | Token storage location                               |
+| `SF_MCP_HOST`           | `127.0.0.1`                        | HTTP bind address                                    |
+| `SF_MCP_ALLOWED_HOSTS`  | —                                  | Extra `Host`/`Origin` values the HTTP server accepts |
+| `SF_MCP_MAX_BODY_BYTES` | `1048576`                          | Request body ceiling                                 |
+| `SF_LOGIN_TIMEOUT_MS`   | `300000`                           | How long `login` waits for the browser               |
+
 ## Security model
 
 - The token grants exactly the permissions of the user who authorized it — the server adds no privilege.
 - In HTTP mode no credentials are persisted; the token lives only for the duration of one request.
-- In stdio mode the saved token file is written `chmod 600`.
-- Tokens are never logged.
+- The stdio token file is written `0600` inside a `0700` directory, replaced atomically via a temp file + rename.
+- Tokens are never logged and never printed by `login`. Errors returned to the model are redacted (session ids, bearer/refresh tokens, OAuth form fields).
+- OAuth login is PKCE with a `state` check, requires an **https** login URL, and binds its callback to `127.0.0.1` with a timeout. The browser is launched via `spawn` with argv — never a shell string.
+- The HTTP listener is loopback-only by default, validates `Host`/`Origin`, and caps request bodies.
+- `logout` revokes the grant at Salesforce, not just locally.
+
+**Known limitation:** the refresh token is stored as plaintext JSON (`0600`). An
+OS-keychain backend is [tracked separately](https://github.com/imazhar101/salesforce-mcp-jsforce/issues).
+Treat the token file as a live credential, and run `logout` on a machine you are
+handing off.
 
 ## Build from source
 

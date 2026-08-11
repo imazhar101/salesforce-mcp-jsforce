@@ -3,7 +3,7 @@ import path from 'node:path'
 
 /** Package identity (kept in sync with package.json). */
 export const PKG_NAME = 'salesforce-mcp-jsforce'
-export const PKG_VERSION = '0.3.0'
+export const PKG_VERSION = '0.4.0'
 
 /** Salesforce REST API version used for all jsforce connections. */
 export const DEFAULT_API_VERSION = process.env.SF_API_VERSION || '62.0'
@@ -19,8 +19,32 @@ export const CONFIG_DIR =
   process.env.SF_MCP_CONFIG_DIR || path.join(os.homedir(), '.config', PKG_NAME)
 export const TOKEN_FILE = path.join(CONFIG_DIR, 'token.json')
 
+/** How long `login` waits for the browser round trip before giving up. */
+export const LOGIN_TIMEOUT_MS = Number(process.env.SF_LOGIN_TIMEOUT_MS || 5 * 60 * 1000)
+
 /**
  * Read-only mode strips all write tools (create/update/delete). Recommended
  * for the publicly hosted server. Set SF_READONLY=1 to enable.
  */
 export const READ_ONLY = process.env.SF_READONLY === '1' || process.env.SF_READONLY === 'true'
+
+/**
+ * HTTP transport bind address. Loopback by default: this server authenticates
+ * nobody itself — it forwards whatever token a request carries — so exposing it
+ * beyond the host must be deliberate (SF_MCP_HOST=0.0.0.0) and paired with a
+ * fronting proxy that does authenticate.
+ */
+export const HTTP_HOST = process.env.SF_MCP_HOST || '127.0.0.1'
+
+/** Largest JSON-RPC body accepted, to bound memory use on a listener. */
+export const HTTP_MAX_BODY_BYTES = Number(process.env.SF_MCP_MAX_BODY_BYTES || 1024 * 1024)
+
+/**
+ * Extra hostnames accepted in the Host/Origin headers. Loopback names are
+ * always allowed; this guards a local listener against DNS rebinding from a
+ * page in the user's browser. Add your public hostname when behind a proxy.
+ */
+export const HTTP_ALLOWED_HOSTS = (process.env.SF_MCP_ALLOWED_HOSTS || '')
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean)

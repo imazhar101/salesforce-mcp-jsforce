@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { IncomingHttpHeaders } from 'node:http'
@@ -5,16 +6,22 @@ import { CONFIG_DIR, TOKEN_FILE, DEFAULT_API_VERSION } from './config.js'
 
 /**
  * The only credentials this server ever handles: an already-issued access
- * token plus the org's instance URL. We never see a client secret, username,
- * or password — that is the whole point of the BYO-token model.
+ * token plus the org's instance URL. We never see a username or password —
+ * that is the whole point of the BYO-token model.
  */
 export interface SfCredentials {
   accessToken: string
   instanceUrl: string
   apiVersion?: string
-  /** Optional, only persisted by `login` so the token can be silently renewed. */
+  /**
+   * Only present for credentials issued by `login`. Together these let the
+   * server renew an expired access token without a new browser sign-in; env
+   * and per-request BYO credentials have none of them by design.
+   */
   refreshToken?: string
   clientId?: string
+  /** Confidential clients only — public PKCE clients (the default) have none. */
+  clientSecret?: string
   loginUrl?: string
 }
 
@@ -52,6 +59,7 @@ export function credsFromFile(): SfCredentials | null {
       apiVersion: data.apiVersion || DEFAULT_API_VERSION,
       refreshToken: data.refreshToken,
       clientId: data.clientId,
+      clientSecret: data.clientSecret,
       loginUrl: data.loginUrl,
     }
   } catch {
@@ -80,7 +88,13 @@ function header(headers: IncomingHttpHeaders, name: string): string | undefined 
   return Array.isArray(v) ? v[0] : v
 }
 
-/** stdio resolver: env wins, then the saved token file. */
+/**
+ * stdio resolver: env wins, then the saved token file.
+ *
+ * Env credentials are a bare access token with no refresh material, so they
+ * cannot be renewed — an explicit SF_ACCESS_TOKEN opts out of silent renewal
+ * and takes the token file's refreshable credentials out of play with it.
+ */
 export function resolveStdioCredentials(): SfCredentials {
   const creds = credsFromEnv() || credsFromFile()
   if (!creds) {
@@ -92,17 +106,73 @@ export function resolveStdioCredentials(): SfCredentials {
   return creds
 }
 
-/** Persist the token issued by `login` (chmod 600 — it is a live credential). */
+/**
+ * Persist credentials for stdio use.
+ *
+ * The file holds a long-lived refresh token, so it is written 0600 inside a
+ * 0700 directory. The write goes to a temp file and is renamed into place: a
+ * crash (or two processes renewing at once) can then never leave a truncated
+ * or interleaved token behind, which previously meant a forced re-login.
+ */
 export function saveToken(creds: SfCredentials): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true })
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 })
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
+  // mkdir's mode is masked by umask, and the directory may predate this version.
+  chmodQuietly(CONFIG_DIR, 0o700)
+
+  const tmp = `${TOKEN_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
   try {
-    fs.chmodSync(TOKEN_FILE, 0o600)
+    fs.writeFileSync(tmp, JSON.stringify(creds, null, 2), { mode: 0o600 })
+    chmodQuietly(tmp, 0o600)
+    fs.renameSync(tmp, TOKEN_FILE)
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      /* nothing to clean up */
+    }
+    throw e
+  }
+}
+
+/** Remove the stored token. Returns false when there was nothing to remove. */
+export function deleteToken(): boolean {
+  try {
+    fs.unlinkSync(TOKEN_FILE)
+    return true
   } catch {
-    /* best effort on platforms without chmod */
+    return false
+  }
+}
+
+function chmodQuietly(target: string, mode: number): void {
+  try {
+    fs.chmodSync(target, mode)
+  } catch {
+    /* best effort — Windows and some mounts do not support POSIX modes */
   }
 }
 
 export function tokenPath(): string {
   return path.normalize(TOKEN_FILE)
+}
+
+/**
+ * Strip credentials out of text that is about to be logged or returned to the
+ * model. Salesforce echoes request material back in `error_description`, and
+ * session ids ride in error bodies, so anything user-facing goes through here.
+ */
+export function redactSecrets(text: string): string {
+  return (
+    text
+      // Salesforce session ids / access tokens: orgId!signature.
+      .replace(/\b00[A-Za-z0-9]{13,16}![^\s"'&]+/g, '[redacted]')
+      // Refresh tokens (5Aep… prefix) and any bearer credential.
+      .replace(/\b5Aep[A-Za-z0-9._-]+/g, '[redacted]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+      // OAuth form/JSON fields, whatever the token shape.
+      .replace(
+        /\b(access_token|refresh_token|client_secret|code_verifier|assertion)\b(["']?\s*[:=]\s*["']?)[^\s"',&}]+/gi,
+        '$1$2[redacted]',
+      )
+  )
 }

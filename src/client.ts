@@ -6,6 +6,11 @@ import { DEFAULT_API_VERSION } from './config.js'
  * Build a jsforce connection from BYO credentials. jsforce's constructor takes
  * `{ accessToken, instanceUrl }` directly, which is exactly the per-request
  * model — so a fresh connection per call is cheap and carries no shared state.
+ *
+ * Deliberately no `oauth2`/`refreshToken` wiring here: renewal lives one level
+ * up in the session runner, which also persists the new token. Turning on
+ * jsforce's own refresh as well would give two renewal paths, only one of which
+ * writes to disk.
  */
 export function makeConnection(creds: SfCredentials): jsforce.Connection {
   return new jsforce.Connection({
