@@ -99,17 +99,33 @@ curl -s http://localhost:3000/mcp \
 
 ## Environment variables
 
-| Var                | Default                        | Purpose                                     |
-| ------------------ | ------------------------------ | ------------------------------------------- |
-| `SF_ACCESS_TOKEN`  | —                              | stdio access token                          |
-| `SF_INSTANCE_URL`  | —                              | stdio instance URL                          |
-| `SF_API_VERSION`   | `62.0`                         | REST API version                            |
-| `SF_READONLY`      | off                            | `1` strips write tools                      |
-| `SF_LOGIN_URL`     | `https://login.salesforce.com` | OAuth host (sandbox: `test.salesforce.com`) |
-| `SF_CLIENT_ID`     | —                              | ECA consumer key for `login`                |
-| `SF_CLIENT_SECRET` | —                              | only for confidential apps                  |
-| `SF_SCOPE`         | `api refresh_token`            | OAuth scopes                                |
-| `PORT`             | `3000`                         | HTTP host port                              |
+### Credentials and tools
+
+| Var               | Default | Purpose                                                   |
+| ----------------- | ------- | --------------------------------------------------------- |
+| `SF_ACCESS_TOKEN` | —       | stdio access token — wins over the token file, no renewal |
+| `SF_INSTANCE_URL` | —       | stdio instance URL                                        |
+| `SF_API_VERSION`  | `62.0`  | REST API version                                          |
+| `SF_READONLY`     | off     | `1` strips write tools                                    |
+
+### `login`
+
+| Var / flag                             | Default                            | Purpose                                                    |
+| -------------------------------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `SF_CLIENT_ID` / `--client-id`         | —                                  | ECA consumer key (required)                                |
+| `SF_LOGIN_URL` / `--login-url`         | `https://login.salesforce.com`     | OAuth host; must be https (sandbox: `test.salesforce.com`) |
+| `SF_SCOPE` / `--scope`                 | `api refresh_token`                | OAuth scopes — drop `refresh_token` and renewal stops      |
+| `SF_CALLBACK_PORT` / `--port`          | `1717`                             | Loopback callback port                                     |
+| `SF_REDIRECT_URI` / `--redirect-uri`   | `http://localhost:<port>/callback` | Full callback URL; loopback hosts only                     |
+| `SF_CLIENT_SECRET` / `--client-secret` | —                                  | Confidential clients only; public PKCE apps omit it        |
+| `SF_LOGIN_TIMEOUT_MS`                  | `300000`                           | How long to wait for the browser round trip                |
+
+The callback port and redirect URI must match what the Connected App registers.
+Salesforce compares `redirect_uri` byte-for-byte, so a different port — or
+`127.0.0.1` where the app registered `localhost` — fails the flow with
+`redirect_uri_mismatch` before the sign-in screen appears.
+
+### Server
 
 | Var                     | Default                            | Purpose                                              |
 | ----------------------- | ---------------------------------- | ---------------------------------------------------- |
@@ -117,7 +133,7 @@ curl -s http://localhost:3000/mcp \
 | `SF_MCP_HOST`           | `127.0.0.1`                        | HTTP bind address                                    |
 | `SF_MCP_ALLOWED_HOSTS`  | —                                  | Extra `Host`/`Origin` values the HTTP server accepts |
 | `SF_MCP_MAX_BODY_BYTES` | `1048576`                          | Request body ceiling                                 |
-| `SF_LOGIN_TIMEOUT_MS`   | `300000`                           | How long `login` waits for the browser               |
+| `PORT`                  | `3000`                             | HTTP listen port                                     |
 
 ## Security model
 
@@ -125,14 +141,17 @@ curl -s http://localhost:3000/mcp \
 - In HTTP mode no credentials are persisted; the token lives only for the duration of one request.
 - The stdio token file is written `0600` inside a `0700` directory, replaced atomically via a temp file + rename.
 - Tokens are never logged and never printed by `login`. Errors returned to the model are redacted (session ids, bearer/refresh tokens, OAuth form fields).
-- OAuth login is PKCE with a `state` check, requires an **https** login URL, and binds its callback to `127.0.0.1` with a timeout. The browser is launched via `spawn` with argv — never a shell string.
+- OAuth login is PKCE with a `state` check, requires an **https** login URL, and times out rather than waiting forever. The callback listens on the loopback interface only — both `127.0.0.1` and `::1`, since `localhost` resolves to either depending on the machine — and a busy port is a hard error, never a silent fallback that would let another process receive the authorization code. `--redirect-uri` is restricted to loopback hosts.
+- The browser is launched via `spawn` with argv — never a shell string, so nothing in the URL reaches a shell.
 - The HTTP listener is loopback-only by default, validates `Host`/`Origin`, and caps request bodies.
 - `logout` revokes the grant at Salesforce, not just locally.
 
-**Known limitation:** the refresh token is stored as plaintext JSON (`0600`). An
-OS-keychain backend is [tracked separately](https://github.com/imazhar101/salesforce-mcp-jsforce/issues).
-Treat the token file as a live credential, and run `logout` on a machine you are
-handing off.
+**Known limitation:** the refresh token is stored as plaintext JSON (`0600` in a
+`0700` directory). That stops other local users, but not code running as you —
+any process in your account can read it. An OS-keychain backend is tracked in
+[#13](https://github.com/imazhar101/salesforce-mcp-jsforce/issues/13). Treat the
+token file as a live credential, and run `logout` on a machine you are handing
+off.
 
 ## Build from source
 
