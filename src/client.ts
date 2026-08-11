@@ -1,6 +1,6 @@
-import jsforce from "jsforce";
-import type { SfCredentials } from "./auth.js";
-import { DEFAULT_API_VERSION } from "./config.js";
+import jsforce from 'jsforce'
+import type { SfCredentials } from './auth.js'
+import { DEFAULT_API_VERSION } from './config.js'
 
 /**
  * Build a jsforce connection from BYO credentials. jsforce's constructor takes
@@ -12,16 +12,16 @@ export function makeConnection(creds: SfCredentials): jsforce.Connection {
     instanceUrl: creds.instanceUrl,
     accessToken: creds.accessToken,
     version: creds.apiVersion || DEFAULT_API_VERSION,
-  });
+  })
 }
 
-export type Conn = jsforce.Connection;
+export type Conn = jsforce.Connection
 
 // ── Read operations ───────────────────────────────────────────────────────────
 
 /** Who does this token belong to? Cheapest possible token-validity check. */
 export async function identity(conn: Conn) {
-  const id = await conn.identity();
+  const id = await conn.identity()
   return {
     user_id: id.user_id,
     organization_id: id.organization_id,
@@ -30,27 +30,27 @@ export async function identity(conn: Conn) {
     email: id.email,
     instance_url: conn.instanceUrl,
     api_version: conn.version,
-  };
+  }
 }
 
 export async function soqlQuery(conn: Conn, soql: string) {
-  const result = await conn.query(soql);
+  const result = await conn.query(soql)
   return {
     totalSize: result.totalSize,
     done: result.done,
     nextRecordsUrl: result.nextRecordsUrl ?? null,
     records: stripAttributes(result.records),
-  };
+  }
 }
 
 /** SOSL full-text search across objects. */
 export async function soslSearch(conn: Conn, sosl: string) {
-  const result = await conn.search(sosl);
-  return { searchRecords: stripAttributes(result.searchRecords as any[]) };
+  const result = await conn.search(sosl)
+  return { searchRecords: stripAttributes(result.searchRecords as any[]) }
 }
 
 export async function listObjects(conn: Conn) {
-  const g = await conn.describeGlobal();
+  const g = await conn.describeGlobal()
   return {
     count: g.sobjects.length,
     sobjects: g.sobjects.map((s) => ({
@@ -63,12 +63,12 @@ export async function listObjects(conn: Conn) {
       updateable: s.updateable,
       deletable: s.deletable,
     })),
-  };
+  }
 }
 
 /** Lean describe — the full payload is enormous, so we trim to the essentials. */
 export async function describeObject(conn: Conn, objectName: string) {
-  const d = await conn.sobject(objectName).describe();
+  const d = await conn.sobject(objectName).describe()
   return {
     name: d.name,
     label: d.label,
@@ -91,52 +91,40 @@ export async function describeObject(conn: Conn, objectName: string) {
         ? f.picklistValues.filter((p) => p.active).map((p) => p.value)
         : undefined,
     })),
-  };
+  }
 }
 
 export async function getRecord(
   conn: Conn,
   objectName: string,
   recordId: string,
-  fields?: string[]
+  fields?: string[],
 ) {
   if (fields && fields.length) {
-    const rows = await conn
-      .sobject(objectName)
-      .find({ Id: recordId }, fields)
-      .limit(1)
-      .execute();
-    return stripAttributes(rows)[0] ?? null;
+    const rows = await conn.sobject(objectName).find({ Id: recordId }, fields).limit(1).execute()
+    return stripAttributes(rows)[0] ?? null
   }
-  const rec = await conn.sobject(objectName).retrieve(recordId);
-  return stripAttributes([rec as any])[0] ?? null;
+  const rec = await conn.sobject(objectName).retrieve(recordId)
+  return stripAttributes([rec as any])[0] ?? null
 }
 
 // ── Write operations (omitted in read-only mode) ───────────────────────────────
 
-export async function createRecord(
-  conn: Conn,
-  objectName: string,
-  data: Record<string, unknown>
-) {
-  return conn.sobject(objectName).create(data as any);
+export async function createRecord(conn: Conn, objectName: string, data: Record<string, unknown>) {
+  return conn.sobject(objectName).create(data as any)
 }
 
 export async function updateRecord(
   conn: Conn,
   objectName: string,
   recordId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
 ) {
-  return conn.sobject(objectName).update({ Id: recordId, ...data } as any);
+  return conn.sobject(objectName).update({ Id: recordId, ...data } as any)
 }
 
-export async function deleteRecord(
-  conn: Conn,
-  objectName: string,
-  recordId: string
-) {
-  return conn.sobject(objectName).destroy(recordId);
+export async function deleteRecord(conn: Conn, objectName: string, recordId: string) {
+  return conn.sobject(objectName).destroy(recordId)
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -144,10 +132,10 @@ export async function deleteRecord(
 /** jsforce decorates every record with a noisy `attributes` block — drop it. */
 function stripAttributes<T>(records: T[]): T[] {
   return records.map((r) => {
-    if (r && typeof r === "object" && "attributes" in (r as any)) {
-      const { attributes, ...rest } = r as any;
-      return rest;
+    if (r && typeof r === 'object' && 'attributes' in (r as any)) {
+      const { attributes, ...rest } = r as any
+      return rest
     }
-    return r;
-  });
+    return r
+  })
 }
