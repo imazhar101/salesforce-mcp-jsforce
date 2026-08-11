@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { PKG_NAME, PKG_VERSION, READ_ONLY } from './config.js'
-import type { CredentialResolver, SfCredentials } from './auth.js'
+import { redactSecrets, type CredentialResolver, type SfCredentials } from './auth.js'
 import * as sf from './client.js'
+import { createSessionRunner } from './session.js'
 
 type TextResult = {
   content: { type: 'text'; text: string }[]
@@ -13,10 +14,15 @@ function ok(data: unknown): TextResult {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
 }
 
+/**
+ * Errors go back to the model, so they are redacted first: Salesforce echoes
+ * request material into `error_description`, and session ids turn up in error
+ * bodies. A leaked token here would land in the transcript.
+ */
 function fail(error: unknown): TextResult {
-  const message = error instanceof Error ? error.message : String(error)
+  const raw = error instanceof Error ? error.message : String(error)
   return {
-    content: [{ type: 'text', text: JSON.stringify({ error: message }, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify({ error: redactSecrets(raw) }, null, 2) }],
     isError: true,
   }
 }
@@ -58,17 +64,40 @@ function perCallCreds(args: ToolArgs): SfCredentials | undefined {
  * resolver (env/token-file) is used. `tools/list` works with no token present.
  *
  * @param readOnly when true, write tools are not registered at all.
+ * @param persist  called with renewed credentials after a silent token refresh;
+ *                 stdio passes `saveToken`, hosted BYO callers pass nothing
+ *                 because they own their own token lifecycle.
  */
 export function buildServer(
   getCreds: CredentialResolver,
   readOnly: boolean = READ_ONLY,
+  persist: (creds: SfCredentials) => void = () => {},
 ): McpServer {
   const server = new McpServer(
     { name: PKG_NAME, version: PKG_VERSION },
     { capabilities: { tools: {} } },
   )
 
-  const conn = (args: ToolArgs = {}) => sf.makeConnection(perCallCreds(args) ?? getCreds())
+  const session = createSessionRunner(getCreds, persist)
+
+  /**
+   * Run one Salesforce call. Resolver-backed credentials go through the session
+   * runner, which renews an expired access token and retries once. Per-request
+   * `_sfAuth` credentials are passed straight through: they arrive without
+   * refresh material, so the caller that minted them owns renewing them.
+   */
+  const call = async <T>(
+    args: ToolArgs,
+    fn: (conn: sf.Conn) => Promise<T>,
+  ): Promise<TextResult> => {
+    try {
+      const byo = perCallCreds(args)
+      if (byo) return ok(await fn(sf.makeConnection(byo)))
+      return ok(await session.run((creds) => fn(sf.makeConnection(creds))))
+    } catch (e) {
+      return fail(e)
+    }
+  }
 
   // ── Read tools ───────────────────────────────────────────────────────────────
 
@@ -76,13 +105,7 @@ export function buildServer(
     'salesforce_identity',
     'Return the identity (user, org, instance) of the supplied token. Use this to confirm the connection is authenticated.',
     { ...BYO_AUTH },
-    async (args) => {
-      try {
-        return ok(await sf.identity(conn(args)))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) => call(args, (c) => sf.identity(c)),
   )
 
   server.tool(
@@ -92,13 +115,7 @@ export function buildServer(
       soql: z.string().describe('A SOQL query, e.g. SELECT Id, Name FROM Account LIMIT 10'),
       ...BYO_AUTH,
     },
-    async (args) => {
-      try {
-        return ok(await sf.soqlQuery(conn(args), args.soql))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) => call(args, (c) => sf.soqlQuery(c, args.soql)),
   )
 
   server.tool(
@@ -110,26 +127,14 @@ export function buildServer(
         .describe('A SOSL search, e.g. FIND {Acme} IN ALL FIELDS RETURNING Account(Id, Name)'),
       ...BYO_AUTH,
     },
-    async (args) => {
-      try {
-        return ok(await sf.soslSearch(conn(args), args.sosl))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) => call(args, (c) => sf.soslSearch(c, args.sosl)),
   )
 
   server.tool(
     'salesforce_list_objects',
     'List all sObjects available in the org with their key metadata.',
     { ...BYO_AUTH },
-    async (args) => {
-      try {
-        return ok(await sf.listObjects(conn(args)))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) => call(args, (c) => sf.listObjects(c)),
   )
 
   server.tool(
@@ -139,13 +144,7 @@ export function buildServer(
       object_name: z.string().describe('API name of the object, e.g. Account or Custom__c'),
       ...BYO_AUTH,
     },
-    async (args) => {
-      try {
-        return ok(await sf.describeObject(conn(args), args.object_name))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) => call(args, (c) => sf.describeObject(c, args.object_name)),
   )
 
   server.tool(
@@ -160,13 +159,8 @@ export function buildServer(
         .describe('Optional list of field API names; omit for all fields'),
       ...BYO_AUTH,
     },
-    async (args) => {
-      try {
-        return ok(await sf.getRecord(conn(args), args.object_name, args.record_id, args.fields))
-      } catch (e) {
-        return fail(e)
-      }
-    },
+    async (args) =>
+      call(args, (c) => sf.getRecord(c, args.object_name, args.record_id, args.fields)),
   )
 
   // ── Write tools (skipped entirely in read-only mode) ──────────────────────────
@@ -180,13 +174,7 @@ export function buildServer(
         data: z.record(z.any()).describe('Field API name → value map for the new record'),
         ...BYO_AUTH,
       },
-      async (args) => {
-        try {
-          return ok(await sf.createRecord(conn(args), args.object_name, args.data))
-        } catch (e) {
-          return fail(e)
-        }
-      },
+      async (args) => call(args, (c) => sf.createRecord(c, args.object_name, args.data)),
     )
 
     server.tool(
@@ -198,13 +186,8 @@ export function buildServer(
         data: z.record(z.any()).describe('Field API name → new value map'),
         ...BYO_AUTH,
       },
-      async (args) => {
-        try {
-          return ok(await sf.updateRecord(conn(args), args.object_name, args.record_id, args.data))
-        } catch (e) {
-          return fail(e)
-        }
-      },
+      async (args) =>
+        call(args, (c) => sf.updateRecord(c, args.object_name, args.record_id, args.data)),
     )
 
     server.tool(
@@ -215,13 +198,7 @@ export function buildServer(
         record_id: z.string().describe('The Id of the record to delete'),
         ...BYO_AUTH,
       },
-      async (args) => {
-        try {
-          return ok(await sf.deleteRecord(conn(args), args.object_name, args.record_id))
-        } catch (e) {
-          return fail(e)
-        }
-      },
+      async (args) => call(args, (c) => sf.deleteRecord(c, args.object_name, args.record_id)),
     )
   }
 
