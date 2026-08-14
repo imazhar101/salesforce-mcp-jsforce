@@ -97,6 +97,46 @@ curl -s http://localhost:3000/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
+## Relay mode — route calls through an MCP gateway
+
+By default this server talks straight to Salesforce. If it runs behind an MCP
+gateway that is supposed to govern data access, that traffic is invisible to it:
+no activity log, no scope enforcement, and read-only enforced only by a
+client-side env var the user can remove.
+
+Relay mode fixes that without moving credentials off the machine. Set
+`SF_RELAY_URL` and the server stops calling Salesforce itself — it forwards each
+JSON-RPC request to the gateway, which runs the real server and applies its own
+policy:
+
+```bash
+export SF_RELAY_URL=https://conduit.example.com/mcp/le-salesforce
+salesforce-mcp-jsforce login            # Salesforce — which data you may see
+salesforce-mcp-jsforce login --gateway  # gateway — who you are, for scopes + audit
+```
+
+Two independent credentials ride on every relayed request, each refreshing
+itself:
+
+| Header                                    | Carries                                        | Refreshed by            |
+| ----------------------------------------- | ---------------------------------------------- | ----------------------- |
+| `Authorization: Bearer …`                 | gateway identity, for scope checks and logging | `login --gateway` grant |
+| `X-SF-Access-Token` / `X-SF-Instance-Url` | Salesforce authorization                       | `login` grant           |
+
+The gateway stores **no** Salesforce credentials — it reads the `X-SF-*` headers
+into a per-request injection and strips them before writing its activity log.
+Your Salesforce refresh token stays on your machine, exactly as in direct mode.
+
+The relay does not interpret the protocol: it forwards requests verbatim and
+returns the gateway's reply unchanged, so it cannot drift out of sync with
+whatever tools the gateway's copy of the server exposes. Each credential gets
+exactly one retry, and only for the failure it can fix — a `401` renews the
+gateway token, an expired-session payload renews the Salesforce one. A `403`
+is reported as a missing scope rather than a bare error.
+
+Sign out of the gateway alone with `salesforce-mcp-jsforce logout --gateway`
+(this drops the local gateway token; it does not touch the Salesforce grant).
+
 ## Environment variables
 
 ### Credentials and tools
@@ -145,6 +185,7 @@ Salesforce compares `redirect_uri` byte-for-byte, so a different port — or
 - The browser is launched via `spawn` with argv — never a shell string, so nothing in the URL reaches a shell.
 - The HTTP listener is loopback-only by default, validates `Host`/`Origin`, and caps request bodies.
 - `logout` revokes the grant at Salesforce, not just locally.
+- Relay mode requires an **https** gateway URL (loopback excepted, for local gateways), so the bearer token is never sent in the clear. The gateway token file gets the same `0600`/`0700` atomic write as the Salesforce one, and gateway errors are redacted before they reach the model — a gateway that echoes the request back cannot leak the Salesforce token into the transcript.
 
 **Known limitation:** the refresh token is stored as plaintext JSON (`0600` in a
 `0700` directory). That stops other local users, but not code running as you —

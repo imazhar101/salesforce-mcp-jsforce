@@ -106,24 +106,30 @@ export function resolveStdioCredentials(): SfCredentials {
   return creds
 }
 
-/**
- * Persist credentials for stdio use.
- *
- * The file holds a long-lived refresh token, so it is written 0600 inside a
- * 0700 directory. The write goes to a temp file and is renamed into place: a
- * crash (or two processes renewing at once) can then never leave a truncated
- * or interleaved token behind, which previously meant a forced re-login.
- */
+/** Persist credentials for stdio use. */
 export function saveToken(creds: SfCredentials): void {
+  writeSecretFile(TOKEN_FILE, JSON.stringify(creds, null, 2))
+}
+
+/**
+ * Write a secret to disk 0600 inside a 0700 config directory, atomically.
+ *
+ * Shared by the Salesforce token and the gateway token, both of which hold
+ * long-lived refresh material. The write goes to a temp file and is renamed
+ * into place: a crash (or two processes renewing at once) can then never leave
+ * a truncated or interleaved credential behind, which previously meant a forced
+ * re-login.
+ */
+export function writeSecretFile(target: string, contents: string): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
   // mkdir's mode is masked by umask, and the directory may predate this version.
   chmodQuietly(CONFIG_DIR, 0o700)
 
-  const tmp = `${TOKEN_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  const tmp = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
   try {
-    fs.writeFileSync(tmp, JSON.stringify(creds, null, 2), { mode: 0o600 })
+    fs.writeFileSync(tmp, contents, { mode: 0o600 })
     chmodQuietly(tmp, 0o600)
-    fs.renameSync(tmp, TOKEN_FILE)
+    fs.renameSync(tmp, target)
   } catch (e) {
     try {
       fs.unlinkSync(tmp)
