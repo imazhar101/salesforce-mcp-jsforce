@@ -115,15 +115,16 @@ describe('relayRequest', () => {
     assert.equal(calls, 2)
   })
 
-  test('explains a 403 as a missing scope', async () => {
+  test('surfaces a bare 403 with its status and body', async () => {
+    // A 403 means something IN FRONT of the gateway rejected the call (proxy,
+    // WAF). A gateway scope denial arrives as 200 + JSON-RPC error instead and
+    // is covered by the pass-through test below.
     const fetchImpl = (async () =>
-      new Response('Access denied: Missing required scope: le-salesforce:soql_query', {
-        status: 403,
-      })) as unknown as typeof fetch
+      new Response('Forbidden by proxy', { status: 403 })) as unknown as typeof fetch
 
     await assert.rejects(
       () => relayRequest(REQUEST, deps(fetchImpl)),
-      /not scoped for le-salesforce/,
+      /HTTP 403\. Forbidden by proxy/,
     )
   })
 
@@ -221,5 +222,80 @@ describe('rpcError', () => {
       id: null,
       error: { code: -32603, message: 'boom' },
     })
+  })
+})
+
+describe('looksSfExpired — expiry that arrives without an error code (#18)', () => {
+  // The server-side child renders errors with fail(), which emits only
+  // error.message. Salesforce's expiry message carries no code, so relayed
+  // expiry looks nothing like the jsforce exception direct mode sees.
+  test("detects Salesforce's bare expiry wording", () => {
+    assert.equal(
+      looksSfExpired({
+        result: { isError: true, content: [{ text: '{"error":"Session expired or invalid"}' }] },
+      }),
+      true,
+    )
+  })
+
+  test('detects the same wording in prose', () => {
+    assert.equal(
+      looksSfExpired({ result: { isError: true, content: [{ text: 'Session expired' }] } }),
+      true,
+    )
+  })
+
+  test('still detects the coded form, for children that preserve errorCode', () => {
+    assert.equal(
+      looksSfExpired({
+        result: {
+          isError: true,
+          content: [{ text: '{"error":"...","errorCode":"INVALID_SESSION_ID"}' }],
+        },
+      }),
+      true,
+    )
+  })
+
+  test('does not treat an ordinary query failure as expiry', () => {
+    assert.equal(
+      looksSfExpired({
+        result: { isError: true, content: [{ text: '{"error":"MALFORMED_QUERY: bad SOQL"}' }] },
+      }),
+      false,
+    )
+  })
+
+  test('does not treat a session-shaped SUCCESS as expiry', () => {
+    // A describe() of a field literally named "session expired" must not
+    // trigger a refresh — only errors can mean expiry.
+    assert.equal(
+      looksSfExpired({ result: { content: [{ text: 'Session expired or invalid' }] } }),
+      false,
+    )
+  })
+})
+
+describe('gateway JSON-RPC errors pass through (#18)', () => {
+  test('a scope denial is forwarded verbatim, not swallowed or retried', async () => {
+    // The gateway answers 200 + JSON-RPC error (-32003) for policy denials, so
+    // the reason reaches the user. The relay must not reinterpret that.
+    let calls = 0
+    const denial = {
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32003, message: 'Access denied: Missing required scope: le-salesforce:*' },
+    }
+    const fetchImpl = (async () => {
+      calls++
+      return new Response(JSON.stringify(denial), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+
+    const reply = await relayRequest(REQUEST, deps(fetchImpl))
+    assert.deepEqual(reply, denial)
+    assert.equal(calls, 1, 'a denial must not trigger a retry')
   })
 })

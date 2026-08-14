@@ -131,8 +131,13 @@ The relay does not interpret the protocol: it forwards requests verbatim and
 returns the gateway's reply unchanged, so it cannot drift out of sync with
 whatever tools the gateway's copy of the server exposes. Each credential gets
 exactly one retry, and only for the failure it can fix — a `401` renews the
-gateway token, an expired-session payload renews the Salesforce one. A `403`
-is reported as a missing scope rather than a bare error.
+gateway token, an expired-session payload renews the Salesforce one.
+
+Scope denials are passed through untouched: the gateway answers `200` with a
+JSON-RPC error so the client shows the reason rather than hanging, and that
+message (`Access denied: Missing required scope: …`) is already the clearest
+thing to show. A bare `403`, which means something in front of the gateway
+rejected the call, is surfaced with its status.
 
 Sign out of the gateway alone with `salesforce-mcp-jsforce logout --gateway`
 (this drops the local gateway token; it does not touch the Salesforce grant).

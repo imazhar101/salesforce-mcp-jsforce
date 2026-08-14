@@ -40,11 +40,28 @@ export function rpcError(id: JsonRpcMessage['id'], message: string): JsonRpcMess
 }
 
 /**
+ * Salesforce's own wording for an expired session.
+ *
+ * Direct mode never needs this: jsforce raises an exception carrying
+ * `errorCode: INVALID_SESSION_ID`, and `isSessionExpired` reads that field.
+ * Across the relay the failure is a tool *result*, rendered by the server-side
+ * child's `fail()`, which emits only `error.message` — so the code is gone and
+ * the text reads simply "Session expired or invalid". Matching the wording is
+ * what makes renewal work against children already deployed (the gateway pins
+ * an older one), rather than only against versions we ship next.
+ */
+const EXPIRED_PHRASES = [/session expired/i, /invalid session/i]
+
+/**
  * Does this gateway response mean the Salesforce token specifically is stale?
  *
  * The gateway answers 200 with an MCP tool error in that case — the HTTP call
  * succeeded, Salesforce is what rejected the credential — so the signal is in
  * the payload text, not the status code.
+ *
+ * Only errors qualify. A *successful* result may legitimately contain this
+ * wording (describing a field named "Session Expired", say) and must never
+ * trigger a refresh.
  */
 export function looksSfExpired(message: JsonRpcMessage): boolean {
   const result = message?.result as { isError?: boolean; content?: { text?: string }[] } | undefined
@@ -53,7 +70,8 @@ export function looksSfExpired(message: JsonRpcMessage): boolean {
     .map((c) => c?.text || '')
     .join(' ')
     .slice(0, 4000)
-  return isSessionExpired({ message: text })
+  // Code first (exact), then wording (works against children that drop it).
+  return isSessionExpired({ message: text }) || EXPIRED_PHRASES.some((re) => re.test(text))
 }
 
 export interface RelayDeps {
@@ -112,12 +130,15 @@ export async function relayRequest(
       )
     }
 
+    // NB: a gateway SCOPE denial does not arrive here. The gateway answers
+    // 200 with a JSON-RPC error (-32003) on purpose, so clients show the reason
+    // instead of hanging; that body is passed through verbatim below, which
+    // already reads "Access denied: Missing required scope: …". This branch is
+    // for a 403 from something in front of the gateway — a proxy or WAF — where
+    // there is no JSON-RPC body to forward.
     if (resp.status === 403) {
       const detail = redactSecrets((await resp.text().catch(() => '')).slice(0, 500))
-      throw new Error(
-        'The LE gateway denied this call — your account is not scoped for le-salesforce. ' +
-          `Ask an admin to grant it. ${detail}`.trim(),
-      )
+      throw new Error(`The gateway rejected this call with HTTP 403. ${detail}`.trim())
     }
 
     if (!resp.ok) {
