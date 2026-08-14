@@ -21,8 +21,16 @@ function ok(data: unknown): TextResult {
  */
 function fail(error: unknown): TextResult {
   const raw = error instanceof Error ? error.message : String(error)
+  // Carry Salesforce's errorCode through as well. When this server runs as a
+  // gateway child the caller sees only this payload — an exception, and the
+  // `errorCode` field a relay needs to recognise an expired session, never
+  // reach it. Emitting the code lets that check be exact instead of matching
+  // on message wording (#18). Additive: `error` keeps its existing shape.
+  const code = (error as { errorCode?: unknown })?.errorCode
+  const body: { error: string; errorCode?: string } = { error: redactSecrets(raw) }
+  if (typeof code === 'string' && code) body.errorCode = code
   return {
-    content: [{ type: 'text', text: JSON.stringify({ error: redactSecrets(raw) }, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
     isError: true,
   }
 }
