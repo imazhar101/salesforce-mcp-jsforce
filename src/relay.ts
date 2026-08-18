@@ -1,4 +1,4 @@
-import { DEFAULT_API_VERSION, PKG_NAME } from './config.js'
+import { DEFAULT_API_VERSION, PKG_NAME, PKG_VERSION } from './config.js'
 import { redactSecrets, type SfCredentials } from './auth.js'
 import { isSessionExpired, type SessionRunner } from './session.js'
 import { GatewayAuthError, type GatewaySession } from './gateway.js'
@@ -83,6 +83,45 @@ export interface RelayDeps {
 }
 
 /**
+ * MCP version this relay speaks. Matches what the gateway answers with, which
+ * is the version already proven against these clients in production.
+ */
+const PROTOCOL_VERSION = '2024-11-05'
+
+/**
+ * Answer the handshake without contacting the gateway.
+ *
+ * Forwarding `initialize` made the MCP handshake require credentials, so a
+ * missing or expired gateway session killed the ENTIRE server — and the client
+ * surfaced it as a bare `-32603`, because a failed handshake has no room for a
+ * message. Users saw a number with nothing actionable in it.
+ *
+ * Nothing is given away by answering locally: the gateway replies to
+ * `initialize` from a canned response and never consults the child, so the
+ * round trip bought nothing. `ping` is transport liveness, not data. Every
+ * request that actually reads Salesforce is still forwarded and still fails
+ * closed without a gateway identity — the auth error simply lands on that call,
+ * where the client does render the text.
+ */
+export function handleLocally(message: JsonRpcMessage): JsonRpcMessage | null {
+  if (message.method === 'initialize') {
+    return {
+      jsonrpc: '2.0',
+      id: message.id ?? null,
+      result: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: PKG_NAME, version: PKG_VERSION },
+      },
+    }
+  }
+  if (message.method === 'ping') {
+    return { jsonrpc: '2.0', id: message.id ?? null, result: {} }
+  }
+  return null
+}
+
+/**
  * Forward one JSON-RPC request and return the gateway's reply.
  *
  * Each credential gets exactly one retry, and only for the failure that
@@ -94,6 +133,9 @@ export async function relayRequest(
   message: JsonRpcMessage,
   deps: RelayDeps,
 ): Promise<JsonRpcMessage | null> {
+  const local = handleLocally(message)
+  if (local) return local
+
   const doFetch = deps.fetchImpl ?? fetch
 
   const post = async (creds: SfCredentials, authorization: string): Promise<Response> =>

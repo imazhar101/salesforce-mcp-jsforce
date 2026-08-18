@@ -139,6 +139,11 @@ message (`Access denied: Missing required scope: …`) is already the clearest
 thing to show. A bare `403`, which means something in front of the gateway
 rejected the call, is surfaced with its status.
 
+The MCP handshake (`initialize`, `ping`) is answered locally and never reaches
+the gateway, so the server still connects when you are not signed in — the auth
+error appears on the first real call, where your client can show it, instead of
+the whole server failing with an unreadable code.
+
 Sign out of the gateway alone with `salesforce-mcp-jsforce logout --gateway`
 (this drops the local gateway token; it does not touch the Salesforce grant).
 
