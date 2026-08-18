@@ -299,3 +299,95 @@ describe('gateway JSON-RPC errors pass through (#18)', () => {
     assert.equal(calls, 1, 'a denial must not trigger a retry')
   })
 })
+
+describe('handshake is answered locally (#20)', () => {
+  // Forwarding initialize made the MCP handshake require credentials, so any
+  // auth problem killed the whole server and the client could only show
+  // "-32603" — a number with nothing actionable in it.
+  const failIfCalled = (async () => {
+    throw new Error('the gateway must not be contacted for the handshake')
+  }) as unknown as typeof fetch
+
+  test('initialize succeeds with no gateway session and never leaves the machine', async () => {
+    const reply = await relayRequest(
+      { jsonrpc: '2.0', id: 0, method: 'initialize', params: {} },
+      {
+        relayUrl: RELAY_URL,
+        gateway: {
+          async authorization() {
+            throw new Error('not signed in')
+          },
+          async renew() {
+            throw new Error('not signed in')
+          },
+        },
+        session: createSessionRunner(
+          () => CREDS,
+          () => {},
+        ),
+        fetchImpl: failIfCalled,
+      },
+    )
+    const result = reply?.result as { protocolVersion?: string; serverInfo?: { name?: string } }
+    assert.equal(reply?.id, 0)
+    assert.ok(result?.protocolVersion, 'must negotiate a protocol version')
+    assert.ok(result?.serverInfo?.name, 'must identify the server')
+    assert.equal(reply?.error, undefined)
+  })
+
+  test('ping is answered locally too', async () => {
+    const reply = await relayRequest({ jsonrpc: '2.0', id: 9, method: 'ping' }, {
+      relayUrl: RELAY_URL,
+      gateway: {
+        async authorization() {
+          throw new Error('not signed in')
+        },
+        async renew() {
+          throw new Error('not signed in')
+        },
+      },
+      session: createSessionRunner(
+        () => CREDS,
+        () => {},
+      ),
+      fetchImpl: failIfCalled,
+    } as RelayDeps)
+    assert.deepEqual(reply, { jsonrpc: '2.0', id: 9, result: {} })
+  })
+
+  test('a real call still requires the gateway session', async () => {
+    await assert.rejects(
+      () =>
+        relayRequest(REQUEST, {
+          relayUrl: RELAY_URL,
+          gateway: {
+            async authorization() {
+              throw new Error('Not signed in to the LE gateway. Run login --gateway first.')
+            },
+            async renew() {
+              throw new Error('not signed in')
+            },
+          },
+          session: createSessionRunner(
+            () => CREDS,
+            () => {},
+          ),
+          fetchImpl: failIfCalled,
+        }),
+      /login --gateway/,
+    )
+  })
+
+  test('tools/list is still forwarded — the handshake exemption is narrow', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls++
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 3, result: { tools: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+    await relayRequest({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, deps(fetchImpl))
+    assert.equal(calls, 1)
+  })
+})

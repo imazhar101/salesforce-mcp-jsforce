@@ -1,6 +1,6 @@
 {
   "name": "@imazhar101/salesforce-mcp-jsforce",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A lite, single-org Salesforce MCP server built on jsforce. Bring-your-own OAuth token \u2014 no credentials stored server-side. Runs over stdio (Claude Code) or as a dedicated streamable-HTTP server.",
   "type": "module",
   "license": "MIT",
