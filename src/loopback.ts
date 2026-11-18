@@ -54,16 +54,27 @@ export function buildRedirectUri(override: string | undefined, port: number): st
  * string — the URL carries caller-supplied values, and a shell would happily
  * execute anything smuggled through them.
  */
+export function browserCommand(
+  platform: NodeJS.Platform,
+  url: string,
+): [command: string, args: string[]] {
+  if (platform === 'darwin') return ['open', [url]]
+  if (platform === 'win32') {
+    // Not `cmd /c start "" <url>`: Node only quotes argv entries that contain
+    // spaces, so cmd.exe saw the bare URL and treated every `&` as a command
+    // separator. The browser got `...authorize?response_type=code` and
+    // Salesforce answered `invalid_client_id` (client identifier invalid).
+    // rundll32's FileProtocolHandler hands the URL to the default browser
+    // with no shell parsing at all.
+    return ['rundll32', ['url.dll,FileProtocolHandler', url]]
+  }
+  return ['xdg-open', [url]]
+}
+
 export function openBrowser(url: string): void {
-  const [cmd, args] =
-    process.platform === 'darwin'
-      ? ['open', [url]]
-      : process.platform === 'win32'
-        ? // cmd's `start` treats the first quoted arg as a window title.
-          ['cmd', ['/c', 'start', '', url]]
-        : ['xdg-open', [url]]
+  const [cmd, args] = browserCommand(process.platform, url)
   try {
-    const child = spawn(cmd as string, args as string[], { stdio: 'ignore', detached: true })
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
     child.on('error', () => {
       /* the URL is already printed for manual use */
     })
